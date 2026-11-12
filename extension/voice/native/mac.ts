@@ -5,7 +5,7 @@
 
 import { spawn, type ChildProcess, execFile } from "node:child_process";
 import { createServer, type Server, type Socket } from "node:net";
-import { appendFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,23 @@ import { createRequire } from "node:module";
 import { readNdjson, type HelperVersion, type SttMessage, type SttOptions, type SttSession, type SpeakHandle, type Voice } from "../protocol";
 
 const LOG_PATH = "/tmp/picrophone-ext.log";
+// Diagnostics are opt-in. This write is a blocking syscall on the event loop and
+// it ran for every STT partial and progress tick (measured ~160us per call, so
+// ~0.8s per 5000 messages) — pure overhead on the hot path. Enable with
+// PICROMEPHONE_DEBUG=1.
+const DEBUG = process.env.PICOMEPHONE_DEBUG === "1";
+// Rotate instead of letting one session's log grow without bound.
+const LOG_MAX_BYTES = 1_000_000;
 function log(msg: string): void {
+	if (!DEBUG) return;
+	try {
+		const size = existsSync(LOG_PATH) ? statSync(LOG_PATH).size : 0;
+		if (size > LOG_MAX_BYTES) {
+			// Keep one previous generation; nothing older is worth the disk.
+			try { unlinkSync(`${LOG_PATH}.1`); } catch {}
+			renameSync(LOG_PATH, `${LOG_PATH}.1`);
+		}
+	} catch {}
 	try {
 		appendFileSync(LOG_PATH, `[${new Date().toISOString()}] ${msg}\n`);
 	} catch {}
