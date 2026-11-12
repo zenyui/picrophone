@@ -26,8 +26,10 @@ function playOnce(file: string): ChildProcess | null {
 				{ stdio: "ignore" },
 			);
 		}
-		// macOS (and Linux with afplay available).
-		return spawn("afplay", [file], { stdio: "ignore" });
+		// macOS (and Linux with afplay available). `detached: false` keeps the
+		// player in this process's group so kill()'s SIGTERM reaches it instead
+		// of orphaning it with an open Core Audio stream.
+		return spawn("afplay", [file], { stdio: "ignore", detached: false });
 	} catch {
 		return null;
 	}
@@ -46,15 +48,39 @@ export const wavCues: CuesProvider = {
 	},
 	hum(): CueHandle {
 		// Loop the one-cycle hum by respawning the player when it exits.
+		//
+		// Each `afplay` spawn opens a fresh Core Audio output stream and only
+		// tears it down on a clean exit, so a 2.4s hum cycle means ~1500 streams
+		// per hour and the previous build leaked them into coreaudiod (~15GB of
+		// retained buffers after a few days, with audioanalyticsd spinning at
+		// 100% CPU trying to account for sessions that no longer exist). Two
+		// changes close that off:
+		//   - `detached: false` keeps the child in this process's group so the
+		//     SIGTERM below actually reaches the player.
+		//   - resolve the handle only once the child has really exited, and stop
+		//     looping on a non-zero/signal exit, so a player that dies or is
+		//     killed can't trigger a respawn that outlives the hum.
+		// The native `hum` subcommand is the leak-free path when the binary is
+		// present; this remains as the no-binary fallback.
 		let killed = false;
 		let child: ChildProcess | null = null;
 		const loop = () => {
 			if (killed) return;
 			child = playOnce(HUM_WAV);
-			child?.on("exit", () => {
-				if (!killed) loop();
+			if (!child) {
+				killed = true; // player unavailable; give up quietly
+				return;
+			}
+			child.on("error", () => {
+				killed = true; // spawn failed; don't spin on it
 			});
-			if (!child) killed = true; // player unavailable; give up quietly
+			child.on("exit", (code, signal) => {
+				child = null;
+				// A signal exit means we killed it — don't restart. A non-zero code
+				// means the player failed; restarting would just spin.
+				if (!killed && code === 0 && signal === null) loop();
+				else if (!killed) killed = true;
+			});
 		};
 		loop();
 		return {
@@ -63,6 +89,9 @@ export const wavCues: CuesProvider = {
 				try {
 					child?.kill("SIGTERM");
 				} catch {}
+				// Drop the reference so the exit handler can't touch a dead handle
+				// and so nothing keeps the player alive via closure.
+				child = null;
 			},
 		};
 	},
