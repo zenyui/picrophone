@@ -262,6 +262,45 @@ export default function (pi: ExtensionAPI) {
 	let suppressInputUntil = 0;
 	const TTS_TAIL_MS = 700;
 
+	// Self-talk backstop. The suppression window above is a flat 700ms while a
+	// `picrophone tts` child lives several seconds, so the tail of our own
+	// read-aloud can finalize as a real transcript: turn -> reply -> read aloud ->
+	// mic hears it -> turn, forever, appending to session.messages and the
+	// session JSONL on every pass. Text can't tell "the user" from "us", so bound
+	// it two ways instead: never auto-send the same normalized transcript twice
+	// inside the window, and never auto-send more often than the interval.
+	const SPEECH_DEDUPE_WINDOW_MS = 15_000;
+	const MIN_SEND_INTERVAL_MS = 2_000;
+	const RECENT_SPEECH_MAX = 16;
+	let recentSpeech: { text: string; at: number }[] = [];
+	let lastAutoSendAt = 0;
+
+	// Compare on words only: whisper is not deterministic about punctuation and
+	// casing for the same audio, and our own read-aloud of a sentence comes back
+	// as roughly what we said.
+	function normalizeSpeech(text: string): string {
+		return text
+			.toLowerCase()
+			.replace(/[^a-z0-9\s]/g, " ")
+			.replace(/\s+/g, " ")
+			.trim();
+	}
+
+	// True if this looks like a repeat of something we already auto-sent (ours
+	// own echo) inside the dedupe window.
+	function isRepeatSpeech(text: string): boolean {
+		const now = Date.now();
+		recentSpeech = recentSpeech.filter((r) => now - r.at < SPEECH_DEDUPE_WINDOW_MS);
+		const norm = normalizeSpeech(text);
+		return recentSpeech.some((r) => r.text === norm);
+	}
+
+	function recordSpeech(text: string): void {
+		recentSpeech.push({ text: normalizeSpeech(text), at: Date.now() });
+		if (recentSpeech.length > RECENT_SPEECH_MAX) recentSpeech.splice(0, recentSpeech.length - RECENT_SPEECH_MAX);
+		lastAutoSendAt = Date.now();
+	}
+
 	// Hum (thinking sound).
 	let humming: { kill: () => void } | null = null;
 
@@ -487,6 +526,14 @@ export default function (pi: ExtensionAPI) {
 				// passed while idle, or omitted while streaming — so a stale choice
 				// would silently drop the utterance. Re-check and retry with the
 				// opposite mode so spoken input is never lost to that race.
+				// Self-talk backstop: drop a transcript we already acted on, or a
+				// new one arriving implausibly soon after the last auto-send. Both
+				// are the signature of hearing our own read-aloud come back, and
+				// each one would otherwise start another turn that ends in another
+				// read-aloud.
+				if (isRepeatSpeech(text)) break;
+				if (lastAutoSendAt !== 0 && Date.now() - lastAutoSendAt < MIN_SEND_INTERVAL_MS) break;
+				recordSpeech(text);
 				void deliverSpoken(`${MIC_PREFIX}${text}`, ctx);
 				break;
 			}
