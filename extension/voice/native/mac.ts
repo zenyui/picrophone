@@ -139,6 +139,13 @@ export function chime(style = "bloop"): void {
 	} catch {}
 }
 
+// Grace period between asking the app to stop and releasing the socket. Short
+// when it is connected (it will close on its own), longer when it is still
+// booting (`open -n` takes ~500ms+) so cleanup doesn't pull the socket out from
+// under an app that is about to connect.
+const STOP_CLEANUP_MS = 300;
+const STOP_CLEANUP_MS_BOOTING = 3_000;
+
 /**
  * Start STT: open a unix socket, launch Picrophone.app (which detaches stdio, so it
  * connects back over the socket and streams NDJSON), stream parsed messages to
@@ -155,11 +162,29 @@ export function startStt(
 
 	let conn: Socket | null = null;
 	let stopped = false;
+	// Set by stop() before the app has connected. Picrophone.app is launched
+	// asynchronously (`open -n`) and needs ~500ms+ to boot and load the model, so
+	// a /voice off inside that window used to drop the stop signal and unlink the
+	// socket out from under the booting app — which then either failed to connect
+	// or kept the mic open. Remember the request and send it the moment we connect.
+	let stopRequested = false;
+	let cleanedUp = false;
 
 	const server: Server = createServer((socket) => {
 		conn = socket;
 		log("Picrophone.app connected to socket");
-		socket.on("close", () => log("socket closed"));
+		if (stopRequested) {
+			try {
+				socket.write("stop\n");
+			} catch {}
+		}
+		socket.on("close", () => {
+			log("socket closed");
+			// The app is gone: release the server + socket handles here instead of
+			// waiting for a stop() that may never come (crash, /voice off from
+			// another path, app killed externally).
+			cleanup();
+		});
 		readNdjson(
 			socket,
 			(obj) => {
@@ -173,10 +198,36 @@ export function startStt(
 		);
 	});
 
+	// `process.on("exit")` only gets synchronous work to run, so use the sync fs
+	// API here: ask the app to stop (best effort — it may still be booting, see
+	// stopRequested) and unlink the socket file we created. Without this, a
+	// SIGHUP'd pi leaves an stt-*.sock behind in $TMPDIR/picrophone.
+	const onProcessExit = () => {
+		try {
+			conn?.write("stop\n");
+		} catch {}
+		try {
+			if (existsSync(sockPath)) unlinkSync(sockPath);
+		} catch {}
+	};
+	process.on("exit", onProcessExit);
+
 	const cleanup = () => {
+		if (cleanedUp) return;
+		cleanedUp = true;
+		stopped = true;
+		// server.close() only stops accepting new connections — the accepted
+		// socket, the server handle and the whole readNdjson closure graph stay
+		// live for the life of the pi process unless we destroy them. That was
+		// one leaked server + socket per voice session.
 		try {
 			server.close();
 		} catch {}
+		try {
+			conn?.destroy();
+		} catch {}
+		conn = null;
+		process.off("exit", onProcessExit);
 		if (existsSync(sockPath)) {
 			try {
 				unlinkSync(sockPath);
@@ -205,10 +256,14 @@ export function startStt(
 		stop: () => {
 			if (stopped) return;
 			stopped = true;
+			stopRequested = true;
 			try {
 				conn?.write("stop\n");
 			} catch {}
-			setTimeout(cleanup, 300);
+			// If the app never connected, wait long enough for it to boot and
+			// connect (so stopRequested can fire) instead of unlinking the socket
+			// path underneath it.
+			setTimeout(cleanup, conn ? STOP_CLEANUP_MS : STOP_CLEANUP_MS_BOOTING);
 		},
 		reset: () => {
 			if (stopped) return;
