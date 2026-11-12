@@ -38,7 +38,7 @@ const QWEN_SPEAKERS = [
 	"ryan", "aiden", "serena", "vivian", "eric", "dylan", "sohee", "ono-anna", "uncle-fu",
 ] as const;
 
-type SttEngine = (typeof STT_ENGINES)[number];
+type SttEngine = (typeof STT_ENGINES)[number] | "none";
 type TtsEngine = (typeof TTS_ENGINES)[number];
 type WhisperModel = keyof typeof WHISPER_MODELS;
 type QwenVoice = (typeof QWEN_SPEAKERS)[number];
@@ -50,7 +50,10 @@ type QwenVoice = (typeof QWEN_SPEAKERS)[number];
 const ConfigSchema = Type.Object({
 	version: Type.Optional(Type.Number()),
 	stt: Type.Object({
-		engine: StringEnum(STT_ENGINES),
+		// "none" disables speech-to-text entirely: /voice on starts read-aloud
+		// and mic-free prompt handling only, never launching a recognizer, so no
+		// mic capture and no speech-recognition process at all.
+		engine: StringEnum(["none", ...STT_ENGINES]),
 		whisper: Type.Object({ model: StringEnum(Object.keys(WHISPER_MODELS) as WhisperModel[]) }),
 	}),
 	tts: Type.Object({
@@ -330,6 +333,9 @@ export default function (pi: ExtensionAPI) {
 		switch (state) {
 			case "thinking": base = "🎙  thinking"; break;
 			case "speaking": base = "🎙  speaking"; break;
+			// stt.engine "none" means there is no microphone at all, so don't
+			// claim the mic is "on" — that reads as capture happening.
+			case "listening": base = cfg.stt.engine === "none" ? "🔈  read-aloud only" : "🎙  on"; break;
 			default: base = micMuted ? "🔇  muted" : "🎙  on"; break;
 		}
 		return [`${base} ${engineInfo()}`];
@@ -608,6 +614,20 @@ export default function (pi: ExtensionAPI) {
 			if (ctx.isIdle()) pi.sendUserMessage(problem.report);
 		}
 		downloadMsg = "starting…";
+		// stt.engine "none" is an explicit opt-out: never capture the mic, never
+		// spawn a recognizer, never keep coreaudiod hot. Read-aloud still works.
+		if (cfg.stt.engine === "none") {
+			stt = null;
+			downloadMsg = "";
+			setState("speaking", ctx);
+			ctx.ui.notify(
+				"picrophone: listening is disabled (stt.engine = \"none\") — read-aloud only, " +
+					"no microphone and no speech recognition. Set stt.engine back to \"whisper\" " +
+					"or \"apple\" in the config to re-enable dictation.",
+				"info",
+			);
+			return;
+		}
 		setState("listening", ctx);
 		if (cfg.stt.engine === "whisper") {
 			ctx.ui.notify(
