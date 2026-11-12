@@ -318,10 +318,22 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	// --- Speak queue: items play to completion in order (no overlap). ------
+	// Hard cap on the read-aloud backlog. Every item is a separate
+	// `picrophone tts` process (seconds of startup + synthesis per item, see
+	// voice/native/mac.ts), so an unbounded queue lets a fast agent build
+	// minutes of backlog and hold that many processes alive — with a stuck
+	// synthesizer (the safety timer there can run up to 120s) it grows for the
+	// whole turn. On overflow drop the OLDEST items: the newest part of the
+	// reply is the part the user is still listening to.
+	const MAX_SPEAK_QUEUE = 8;
+
 	function enqueueSpeak(text: string, ctx: ExtensionContext) {
 		const spoken = toSpeakable(text);
 		if (!spoken) return;
 		speakQueue.push(spoken);
+		if (speakQueue.length > MAX_SPEAK_QUEUE) {
+			speakQueue.splice(0, speakQueue.length - MAX_SPEAK_QUEUE);
+		}
 		if (!speaking) drainSpeak(ctx);
 	}
 
