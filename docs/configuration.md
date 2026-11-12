@@ -22,7 +22,8 @@ sub-object per provider for that provider's own settings.
   "tts": {
     "engine": "av",
     "qwen": { "voice": "aiden" }
-  }
+  },
+  "hum": { "enabled": false }
 }
 ```
 
@@ -32,6 +33,10 @@ sub-object per provider for that provider's own settings.
 | `stt.whisper.model` | `tiny`, `base`, `small`, `large` | `base` | Used when `stt.engine` is `whisper`. Mapped to the WhisperKit model on our side. |
 | `tts.engine` | `auto` \| `av` \| `say` \| `qwen` | `av` | Read-aloud back-end. |
 | `tts.qwen.voice` | `ryan`, `aiden`, `serena`, `vivian`, `eric`, `dylan`, `sohee`, `ono-anna`, `uncle-fu` | `aiden` | Used when `tts.engine` is `qwen`. |
+| `hum.enabled` | `true` \| `false` | `true` | The "thinking" tone. Set to `false` to turn it off — it's a long, continuous sound under every turn, which some people find irritating. The whole `hum` section is optional; omit it to keep the default. |
+
+Turning the hum off doesn't affect anything else: `listening`/`stop` earcons and
+read-aloud are unaffected, and the widget still shows the `thinking` state.
 
 See [engines](engines.md) for what each engine does.
 

@@ -57,12 +57,16 @@ const ConfigSchema = Type.Object({
 		engine: StringEnum(TTS_ENGINES),
 		qwen: Type.Object({ voice: StringEnum(QWEN_SPEAKERS) }),
 	}),
+	// Optional so existing config files still validate — a missing section means
+	// "use the default", never "invalid file, fall back to everything".
+	hum: Type.Optional(Type.Object({ enabled: Type.Boolean() })),
 });
 type VoiceConfig = Omit<Static<typeof ConfigSchema>, "version">;
 
 const DEFAULT_CONFIG: VoiceConfig = {
 	stt: { engine: "whisper", whisper: { model: "base" } },
 	tts: { engine: "av", qwen: { voice: DEFAULT_QWEN_VOICE as QwenVoice } },
+	hum: { enabled: true },
 };
 
 // Backend id mappings used at the native boundary.
@@ -667,7 +671,11 @@ export default function (pi: ExtensionAPI) {
 		generating = true;
 		streamedTurn = false;
 		setState("thinking", ctx);
-		if (!humming) humming = cues?.hum() ?? null;
+		// The hum is a long, continuous tone under every turn. Plenty of people find
+		// that actively irritating (it runs while they read the reply, and with a slow
+		// engine for a long time), and there's no other reason it's on — so it's
+		// opt-out via config: hum.enabled = false.
+		if (cfg.hum?.enabled !== false && !humming) humming = cues?.hum() ?? null;
 	});
 
 	// Stream read-aloud: as assistant text arrives, flush complete sentences into
