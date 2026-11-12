@@ -347,18 +347,26 @@ export default function (pi: ExtensionAPI) {
 		}
 		speaking = s;
 		void s.done.then(() => {
-			if (speaking === s) {
-				speaking = null;
-				suppressInputUntil = Date.now() + TTS_TAIL_MS;
-				// Flush any of our own TTS the mic picked up during playback so it
-				// never finalizes into a spurious message. Wait out the echo tail
-				// first so trailing audio is discarded too.
-				if (speakQueue.length === 0) {
-					const gen = ++speakGen;
-					setTimeout(() => {
-						if (gen === speakGen && !speaking) stt?.reset();
-					}, TTS_TAIL_MS);
-				}
+			// Stale completion: this handle was already replaced (clearSpeakQueue
+			// killed it and dropped the reference, or a newer child took over).
+			// `done` resolves on the child's real exit event, tens of ms after
+			// SIGTERM, so draining here would spawn a second synthesizer while
+			// the killed one is still winding down — and it would overwrite
+			// `speaking`, orphaning the live child's kill handle forever (a Swift
+			// process holding an AVSpeechSynthesizer + Core Audio output stream
+			// that nothing can kill). One orphan per interrupt is how memory grows
+			// over a session. Do nothing.
+			if (speaking !== s) return;
+			speaking = null;
+			suppressInputUntil = Date.now() + TTS_TAIL_MS;
+			// Flush any of our own TTS the mic picked up during playback so it
+			// never finalizes into a spurious message. Wait out the echo tail
+			// first so trailing audio is discarded too.
+			if (speakQueue.length === 0) {
+				const gen = ++speakGen;
+				setTimeout(() => {
+					if (gen === speakGen && !speaking) stt?.reset();
+				}, TTS_TAIL_MS);
 			}
 			drainSpeak(ctx);
 		});
