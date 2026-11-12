@@ -74,15 +74,26 @@ export function getVersion(): Promise<HelperVersion> {
 	});
 }
 
+// `say`'s own default pace, in words per minute. Measured, not guessed: with no
+// -r flag `say` renders identically to `-r 175` on this platform.
+const SAY_DEFAULT_WPM = 175;
+
 /**
  * Speak text aloud via `picrophone tts`. Text is piped over stdin; killing the
  * process supports barge-in. `engine` (av | say | qwen) is optional; omit for
  * picrophone's own `auto`. `voiceId` is an AVSpeech voice or a Qwen3 speaker id.
+ * `rate` is a speed multiplier (1 = engine default) and applies to `say` only.
  */
-export function speak(text: string, opts: { engine?: string; voiceId?: string } = {}): SpeakHandle {
+export function speak(text: string, opts: { engine?: string; voiceId?: string; rate?: number } = {}): SpeakHandle {
 	const args = ["tts"];
 	if (opts.engine) args.push("--engine", opts.engine);
 	if (opts.voiceId) args.push("--voice", opts.voiceId);
+	if (opts.rate != null && opts.engine === "say") {
+		// The CLI takes whole words per minute; round rather than truncate so
+		// 1.5 -> 262.5 lands on 263 instead of 262.
+		const wpm = Math.round(opts.rate * SAY_DEFAULT_WPM);
+		args.push("--rate", String(wpm));
+	}
 	const child = spawn(BIN, args, { stdio: ["pipe", "ignore", "ignore"] });
 	child.stdin.on("error", () => {});
 	child.stdin.end(text);

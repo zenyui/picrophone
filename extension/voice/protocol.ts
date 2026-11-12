@@ -45,6 +45,12 @@ export interface SpeakOptions {
 	/** Backend voice id (AVSpeech voice, or a Qwen3 speaker id). */
 	voiceId?: string;
 	/**
+	 * Speed as a multiple of the engine's default pace (1 = unchanged). The
+	 * macOS `say` engine's default is 175 words per minute, so 1.5 -> ~262 wpm.
+	 * Only honored by engines with a tunable rate; others ignore it.
+	 */
+	rate?: number;
+	/**
 	 * Backend-specific engine hint. For the macOS system provider this is
 	 * "av" | "say", or omitted for the OS default ("auto"). Providers that
 	 * expose a single backend ignore it.

@@ -124,7 +124,15 @@ private func speakSay(_ text: String, voiceId: String?, rate: Int?) -> Never {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
     var sayArgs: [String] = []
     if let voiceId { sayArgs += ["-v", voiceId] }
-    if let rate { sayArgs += ["-r", String(rate)] }
+    if let rate {
+        // `say` reads -r as words per minute. Reject nonsense loudly instead of
+        // letting say clamp it silently — an out-of-range rate (e.g. 1 or 100000)
+        // would otherwise play at an unusable speed with no diagnostic.
+        guard rate >= 60, rate <= 600 else {
+            fail("--rate \(rate) out of range for the say engine (60-600 words per minute)")
+        }
+        sayArgs += ["-r", String(rate)]
+    }
     sayArgs += ["-f", "-"]
     process.arguments = sayArgs
 
@@ -287,7 +295,17 @@ func runTTS(_ args: [String]) -> Never {
 
     switch resolveTTSEngine(engine) {
     case .say:
-        speakSay(text, voiceId: voiceId, rate: rateArg.flatMap { Int($0) })
+        // Parse strictly: `say`'s rate is integer wpm. A non-integer value used to
+        // fail Int() -> nil -> silently fall back to 175, which read as "my speed
+        // setting does nothing". Reject it instead so the cause is visible.
+        var sayRate: Int?
+        if let raw = rateArg {
+            guard let parsed = Int(raw.trimmingCharacters(in: .whitespaces)) else {
+                fail("--rate '\(raw)' is not a whole number of words per minute for the say engine")
+            }
+            sayRate = parsed
+        }
+        speakSay(text, voiceId: voiceId, rate: sayRate)
     case .neural:
         speakNeural(text, voiceId: voiceId, rate: rateArg.flatMap { Float($0) })
     case .qwen:

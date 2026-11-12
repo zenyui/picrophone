@@ -56,6 +56,10 @@ const ConfigSchema = Type.Object({
 	tts: Type.Object({
 		engine: StringEnum(TTS_ENGINES),
 		qwen: Type.Object({ voice: StringEnum(QWEN_SPEAKERS) }),
+		// Speed as a multiple of the engine default (1 = unchanged). The say
+		// engine defaults to 175 wpm, so 1.5 is ~262. Bounds keep a typo from
+		// producing glacial or unintelligible playback instead of an error.
+		rate: Type.Optional(Type.Number({ minimum: 0.5, maximum: 3 })),
 	}),
 	// Optional so existing config files still validate — a missing section means
 	// "use the default", never "invalid file, fall back to everything".
@@ -245,7 +249,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		return cfg.tts.engine === "qwen"
 			? prov.speak(text, { voiceId: cfg.tts.qwen.voice })
-			: prov.speak(text, { engine: cfg.tts.engine });
+			: prov.speak(text, { engine: cfg.tts.engine, rate: cfg.tts.rate });
 	}
 
 	// TTS + speak queue.

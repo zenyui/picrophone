@@ -17,7 +17,7 @@ export const systemTts: TtsProvider = {
 	speak(text: string, opts: SpeakOptions = {}): SpeakHandle {
 		// engine "auto" (or unset) -> let picrophone pick the best available backend.
 		const engine = opts.engine && opts.engine !== "auto" ? opts.engine : undefined;
-		return speak(text, { engine, voiceId: opts.voiceId });
+		return speak(text, { engine, voiceId: opts.voiceId, rate: opts.rate });
 	},
 	listVoices(): Promise<Voice[]> {
 		return getVoices();
