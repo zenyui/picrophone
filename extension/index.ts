@@ -327,8 +327,39 @@ export default function (pi: ExtensionAPI) {
 		return [`${base} ${engineInfo()}`];
 	}
 
+	// Whisper emits partials several times a second and each one came straight
+	// through here: setWidget disposes the old component, builds a new
+	// Container/Text pair and requests a full TUI render. A one-line widget needs
+	// ~10Hz at most, so coalesce to WIDGET_MIN_INTERVAL_MS and skip renders where
+	// the rendered lines are unchanged (the common case: same state, same text).
+	const WIDGET_MIN_INTERVAL_MS = 100;
+	let lastWidgetAt = 0;
+	let lastWidgetLines: string[] | null = null;
+	let widgetTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function paintWidget(ctx: ExtensionContext) {
+		lastWidgetAt = Date.now();
+		const lines = renderWidget();
+		const prev = lastWidgetLines;
+		if (prev !== null && prev.length === lines.length && prev.every((l, i) => l === lines[i])) return;
+		lastWidgetLines = lines;
+		// The trailing edge of a throttle can land after the session changed ctx.
+		try {
+			ctx.ui.setWidget("picrophone", lines);
+		} catch {}
+	}
+
 	function updateWidget(ctx: ExtensionContext) {
-		ctx.ui.setWidget("picrophone", renderWidget());
+		const since = Date.now() - lastWidgetAt;
+		if (since >= WIDGET_MIN_INTERVAL_MS) {
+			paintWidget(ctx);
+			return;
+		}
+		if (widgetTimer) return; // a coalesced render is already scheduled
+		widgetTimer = setTimeout(() => {
+			widgetTimer = null;
+			paintWidget(ctx);
+		}, WIDGET_MIN_INTERVAL_MS - since);
 	}
 
 	function setState(next: VoiceState, ctx: ExtensionContext) {
